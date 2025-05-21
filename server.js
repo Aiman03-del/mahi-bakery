@@ -28,6 +28,11 @@ async function connectDB() {
 }
 connectDB();
 
+// Home route - Welcome message
+app.get("/", (req, res) => {
+  res.send("স্বাগতম! মাহি বেকারির সার্ভার চলছে 🚀");
+});
+
 // POST - Save Daily Usage
 app.post("/usage", async (req, res) => {
   try {
