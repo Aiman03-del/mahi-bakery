@@ -15,12 +15,16 @@ app.use(express.json());
 // MongoDB Setup
 const client = new MongoClient(process.env.MONGODB_URI);
 let usageCollection;
+let itemsCollection;
+let ingredientsCollection;
 
 async function connectDB() {
   try {
     await client.connect();
     const db = client.db("mahiBakery");
     usageCollection = db.collection("dailyUsage");
+    itemsCollection = db.collection("items");
+    ingredientsCollection = db.collection("ingredients");
     console.log("✅ Connected to MongoDB");
   } catch (err) {
     console.error("❌ MongoDB connection error:", err);
@@ -33,11 +37,31 @@ app.get("/", (req, res) => {
   res.send("স্বাগতম! মাহি বেকারির সার্ভার চলছে 🚀");
 });
 
+// Helper: always get date as yyyy-MM-dd (local time zone safe)
+const toDateKey = (date) => {
+  if (!date) return "";
+  // If already yyyy-MM-dd, return as is
+  if (/^\d{4}-\d{2}-\d{2}$/.test(date)) return date;
+  // Otherwise, parse and convert
+  const d = new Date(date);
+  if (isNaN(d.getTime())) return "";
+  // Convert to local date string (not UTC)
+  const tzOffset = d.getTimezoneOffset() * 60000;
+  const localISO = new Date(d.getTime() - tzOffset).toISOString().slice(0, 10);
+  return localISO;
+};
+
 // POST - Save Daily Usage
 app.post("/usage", async (req, res) => {
   try {
     const data = req.body;
-    const result = await usageCollection.insertOne(data);
+    // Always save date as yyyy-MM-dd
+    const dateKey = toDateKey(data.date);
+    await usageCollection.deleteMany({ date: dateKey });
+    // Save retails array if present
+    const doc = { ...data, date: dateKey };
+    if (!doc.retails) doc.retails = [];
+    const result = await usageCollection.insertOne(doc);
     res.status(201).json({ insertedId: result.insertedId });
   } catch (error) {
     res.status(500).json({ error: "Failed to insert data" });
@@ -47,10 +71,23 @@ app.post("/usage", async (req, res) => {
 // GET - Get Usage by Date
 app.get("/api/usage/:date", async (req, res) => {
   try {
-    const queryDate = req.params.date;
-    const result = await usageCollection.findOne({ date: queryDate });
-    if (!result) return res.status(404).json({ message: "No data found" });
-    res.json(result);
+    const dateKey = toDateKey(req.params.date);
+    const result = await usageCollection.findOne({ date: dateKey });
+    if (!result) {
+      // Return empty usage data instead of 404
+      return res.json({
+        items: [],
+        prices: [],
+        retails: [],
+        totalExpense: "0",
+      });
+    }
+    res.json({
+      items: result.items || [],
+      prices: result.prices || [],
+      retails: result.retails || [],
+      totalExpense: result.totalExpense || "0",
+    });
   } catch (error) {
     res.status(500).json({ error: "Failed to fetch data" });
   }
@@ -129,6 +166,50 @@ app.get("/api/usage", async (req, res) => {
     return res.json(Object.values(grouped));
   } catch (error) {
     res.status(500).json({ error: "Failed to fetch usages" });
+  }
+});
+
+// --- Items API ---
+app.get("/api/items", async (req, res) => {
+  try {
+    const items = await itemsCollection.find({}).sort({ _id: -1 }).toArray();
+    res.json(items);
+  } catch {
+    res.status(500).json({ error: "Failed to fetch items" });
+  }
+});
+app.post("/api/items", async (req, res) => {
+  try {
+    const { name } = req.body;
+    if (!name) return res.status(400).json({ error: "Name required" });
+    const exists = await itemsCollection.findOne({ name });
+    if (exists) return res.status(409).json({ error: "Already exists" });
+    const result = await itemsCollection.insertOne({ name });
+    res.status(201).json({ insertedId: result.insertedId });
+  } catch {
+    res.status(500).json({ error: "Failed to add item" });
+  }
+});
+
+// --- Ingredients API ---
+app.get("/api/ingredients", async (req, res) => {
+  try {
+    const ingredients = await ingredientsCollection.find({}).sort({ _id: -1 }).toArray();
+    res.json(ingredients);
+  } catch {
+    res.status(500).json({ error: "Failed to fetch ingredients" });
+  }
+});
+app.post("/api/ingredients", async (req, res) => {
+  try {
+    const { name } = req.body;
+    if (!name) return res.status(400).json({ error: "Name required" });
+    const exists = await ingredientsCollection.findOne({ name });
+    if (exists) return res.status(409).json({ error: "Already exists" });
+    const result = await ingredientsCollection.insertOne({ name });
+    res.status(201).json({ insertedId: result.insertedId });
+  } catch {
+    res.status(500).json({ error: "Failed to add ingredient" });
   }
 });
 
