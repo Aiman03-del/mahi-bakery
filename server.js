@@ -17,6 +17,7 @@ const client = new MongoClient(process.env.MONGODB_URI);
 let usageCollection;
 let itemsCollection;
 let ingredientsCollection;
+let usersCollection; // <-- add
 
 async function connectDB() {
   try {
@@ -25,6 +26,7 @@ async function connectDB() {
     usageCollection = db.collection("dailyUsage");
     itemsCollection = db.collection("items");
     ingredientsCollection = db.collection("ingredients");
+    usersCollection = db.collection("users"); // <-- add
     console.log("✅ Connected to MongoDB");
   } catch (err) {
     console.error("❌ MongoDB connection error:", err);
@@ -210,6 +212,39 @@ app.post("/api/ingredients", async (req, res) => {
     res.status(201).json({ insertedId: result.insertedId });
   } catch {
     res.status(500).json({ error: "Failed to add ingredient" });
+  }
+});
+
+// --- Users API ---
+// Save user (upsert by email)
+app.post("/api/users", async (req, res) => {
+  try {
+    const { displayName, photoURL, email, role } = req.body;
+    console.log("Received user data:", req.body); // <-- লগ করুন
+    if (!email) return res.status(400).json({ error: "Email required" });
+    const userDoc = { displayName, photoURL, email, role: role || "user" };
+    const result = await usersCollection.updateOne(
+      { email },
+      { $set: userDoc },
+      { upsert: true }
+    );
+    console.log("MongoDB upsert result:", result); // <-- লগ করুন
+    res.status(201).json({ message: "User saved" });
+  } catch (err) {
+    console.error("❌ Failed to save user:", err); // <-- এরর লগ করুন
+    res.status(500).json({ error: "Failed to save user" });
+  }
+});
+
+// Get user by email
+app.get("/api/users/:email", async (req, res) => {
+  try {
+    const email = req.params.email;
+    const user = await usersCollection.findOne({ email });
+    if (!user) return res.status(200).json({});
+    res.json(user);
+  } catch {
+    res.status(500).json({ error: "Failed to fetch user" });
   }
 });
 
