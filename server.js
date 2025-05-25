@@ -63,6 +63,7 @@ app.post("/usage", async (req, res) => {
     // Save retails array if present
     const doc = { ...data, date: dateKey };
     if (!doc.retails) doc.retails = [];
+    if (!doc.pieces) doc.pieces = []; // Ensure pieces is always present
     const result = await usageCollection.insertOne(doc);
     res.status(201).json({ insertedId: result.insertedId });
   } catch (error) {
@@ -81,6 +82,7 @@ app.get("/api/usage/:date", async (req, res) => {
         items: [],
         prices: [],
         retails: [],
+        pieces: [], // Return empty pieces array if not found
         totalExpense: "0",
       });
     }
@@ -88,6 +90,7 @@ app.get("/api/usage/:date", async (req, res) => {
       items: result.items || [],
       prices: result.prices || [],
       retails: result.retails || [],
+      pieces: result.pieces || [], // Return pieces from DB
       totalExpense: result.totalExpense || "0",
     });
   } catch (error) {
