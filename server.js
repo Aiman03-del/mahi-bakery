@@ -1,6 +1,6 @@
 const express = require("express");
 const cors = require("cors");
-const { MongoClient } = require("mongodb");
+const { MongoClient, ObjectId } = require("mongodb");
 const dotenv = require("dotenv");
 const moment = require("moment");
 dotenv.config();
@@ -178,6 +178,8 @@ app.get("/api/usage", async (req, res) => {
 app.get("/api/items", async (req, res) => {
   try {
     const items = await itemsCollection.find({}).sort({ _id: -1 }).toArray();
+    // Ensure price field exists
+    items.forEach(item => { if (item.price === undefined) item.price = ""; });
     res.json(items);
   } catch {
     res.status(500).json({ error: "Failed to fetch items" });
@@ -185,11 +187,11 @@ app.get("/api/items", async (req, res) => {
 });
 app.post("/api/items", async (req, res) => {
   try {
-    const { name } = req.body;
+    const { name, price } = req.body;
     if (!name) return res.status(400).json({ error: "Name required" });
     const exists = await itemsCollection.findOne({ name });
     if (exists) return res.status(409).json({ error: "Already exists" });
-    const result = await itemsCollection.insertOne({ name });
+    const result = await itemsCollection.insertOne({ name, price: price || "" });
     res.status(201).json({ insertedId: result.insertedId });
   } catch {
     res.status(500).json({ error: "Failed to add item" });
@@ -200,6 +202,7 @@ app.post("/api/items", async (req, res) => {
 app.get("/api/ingredients", async (req, res) => {
   try {
     const ingredients = await ingredientsCollection.find({}).sort({ _id: -1 }).toArray();
+    ingredients.forEach(ing => { if (ing.price === undefined) ing.price = ""; });
     res.json(ingredients);
   } catch {
     res.status(500).json({ error: "Failed to fetch ingredients" });
@@ -207,11 +210,11 @@ app.get("/api/ingredients", async (req, res) => {
 });
 app.post("/api/ingredients", async (req, res) => {
   try {
-    const { name } = req.body;
+    const { name, price } = req.body;
     if (!name) return res.status(400).json({ error: "Name required" });
     const exists = await ingredientsCollection.findOne({ name });
     if (exists) return res.status(409).json({ error: "Already exists" });
-    const result = await ingredientsCollection.insertOne({ name });
+    const result = await ingredientsCollection.insertOne({ name, price: price || "" });
     res.status(201).json({ insertedId: result.insertedId });
   } catch {
     res.status(500).json({ error: "Failed to add ingredient" });
@@ -248,6 +251,78 @@ app.get("/api/users/:email", async (req, res) => {
     res.json(user);
   } catch {
     res.status(500).json({ error: "Failed to fetch user" });
+  }
+});
+
+// --- Manage Items & Ingredients API ---
+// Get all items and ingredients together
+app.get("/api/manage", async (req, res) => {
+  try {
+    const items = await itemsCollection.find({}).sort({ _id: -1 }).toArray();
+    const ingredients = await ingredientsCollection.find({}).sort({ _id: -1 }).toArray();
+    items.forEach(item => { if (item.price === undefined) item.price = ""; });
+    ingredients.forEach(ing => { if (ing.price === undefined) ing.price = ""; });
+    res.json({ items, ingredients });
+  } catch {
+    res.status(500).json({ error: "Failed to fetch data" });
+  }
+});
+
+// Update item by id
+app.put("/api/items/:id", async (req, res) => {
+  try {
+    const { name, price } = req.body;
+    const id = req.params.id;
+    if (!name) return res.status(400).json({ error: "Name required" });
+    const updateDoc = { name };
+    if (price !== undefined) updateDoc.price = price;
+    const result = await itemsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: updateDoc }
+    );
+    res.json({ modifiedCount: result.modifiedCount });
+  } catch {
+    res.status(500).json({ error: "Failed to update item" });
+  }
+});
+
+// Delete item by id
+app.delete("/api/items/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const result = await itemsCollection.deleteOne({ _id: new ObjectId(id) });
+    res.json({ deletedCount: result.deletedCount });
+  } catch {
+    res.status(500).json({ error: "Failed to delete item" });
+  }
+});
+
+// Update ingredient by id
+app.put("/api/ingredients/:id", async (req, res) => {
+  try {
+    const { name, price } = req.body;
+    const id = req.params.id;
+    if (!name) return res.status(400).json({ error: "Name required" });
+    const updateDoc = { name };
+    if (price !== undefined) updateDoc.price = price;
+    const result = await ingredientsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: updateDoc }
+    );
+    res.json({ modifiedCount: result.modifiedCount });
+  } catch {
+    res.status(500).json({ error: "Failed to update ingredient" });
+  }
+});
+
+// Delete ingredient by id
+app.delete("/api/ingredients/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const result = await ingredientsCollection.deleteOne({ _id: new ObjectId(id) });
+    res.json({ deletedCount: result.deletedCount });
+  } catch {
+    res.status(500).json({ error: "Failed to delete ingredient" });
   }
 });
 
