@@ -18,6 +18,8 @@ let usageCollection;
 let itemsCollection;
 let ingredientsCollection;
 let usersCollection; // <-- add
+let salesmenCollection; // <-- add
+let salesmanOrdersCollection; // <-- add
 
 async function connectDB() {
   try {
@@ -27,6 +29,8 @@ async function connectDB() {
     itemsCollection = db.collection("items");
     ingredientsCollection = db.collection("ingredients");
     usersCollection = db.collection("users"); // <-- add
+    salesmenCollection = db.collection("salesmen"); // <-- add
+    salesmanOrdersCollection = db.collection("salesmanOrders"); // <-- add
     console.log("✅ Connected to MongoDB");
   } catch (err) {
     console.error("❌ MongoDB connection error:", err);
@@ -323,6 +327,152 @@ app.delete("/api/ingredients/:id", async (req, res) => {
     res.json({ deletedCount: result.deletedCount });
   } catch {
     res.status(500).json({ error: "Failed to delete ingredient" });
+  }
+});
+
+// --- Salesmen API ---
+// Get all salesmen
+app.get("/api/salesmen", async (req, res) => {
+  try {
+    const salesmen = await salesmenCollection.find({}).sort({ _id: 1 }).toArray();
+    res.json(salesmen);
+  } catch {
+    res.status(500).json({ error: "Failed to fetch salesmen" });
+  }
+});
+
+// Add a new salesman
+app.post("/api/salesmen", async (req, res) => {
+  try {
+    const { name, phone } = req.body;
+    if (!name) return res.status(400).json({ error: "Name required" });
+    const exists = await salesmenCollection.findOne({ name });
+    if (exists) return res.status(409).json({ error: "Already exists" });
+    // phone can be empty or undefined, always save as string (even if empty)
+    const result = await salesmenCollection.insertOne({ name, phone: phone ? phone : "" });
+    res.status(201).json({ insertedId: result.insertedId });
+  } catch {
+    res.status(500).json({ error: "Failed to add salesman" });
+  }
+});
+
+// Update salesman by id
+app.put("/api/salesmen/:id", async (req, res) => {
+  try {
+    const { name, phone } = req.body;
+    const id = req.params.id;
+    if (!name) return res.status(400).json({ error: "Name required" });
+    const updateDoc = { name };
+    if (phone !== undefined) updateDoc.phone = phone;
+    else updateDoc.phone = "";
+    const result = await salesmenCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: updateDoc }
+    );
+    res.json({ modifiedCount: result.modifiedCount });
+  } catch {
+    res.status(500).json({ error: "Failed to update salesman" });
+  }
+});
+
+// Delete salesman by id
+app.delete("/api/salesmen/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const result = await salesmenCollection.deleteOne({ _id: new ObjectId(id) });
+    res.json({ deletedCount: result.deletedCount });
+  } catch {
+    res.status(500).json({ error: "Failed to delete salesman" });
+  }
+});
+
+// --- Salesman Orders API ---
+// Each order: { salesmanId, itemId, qty, date }
+// Get orders for a specific date (or all if no date)
+app.get("/api/salesman-orders", async (req, res) => {
+  try {
+    const { date } = req.query;
+    let query = {};
+    if (date) query.date = date;
+    const orders = await salesmanOrdersCollection.find(query).toArray();
+    res.json(orders);
+  } catch {
+    res.status(500).json({ error: "Failed to fetch orders" });
+  }
+});
+
+// Add or update a salesman order (upsert by salesmanId, itemId, date)
+app.post("/api/salesman-orders", async (req, res) => {
+  try {
+    const { salesmanId, itemId, qty, date } = req.body;
+    if (!salesmanId || !itemId || !date) {
+      return res.status(400).json({ error: "salesmanId, itemId, date required" });
+    }
+    const filter = { salesmanId, itemId, date };
+    const update = { $set: { salesmanId, itemId, qty, date } };
+    const result = await salesmanOrdersCollection.updateOne(filter, update, { upsert: true });
+    res.status(201).json({ upserted: result.upsertedId, modified: result.modifiedCount });
+  } catch {
+    res.status(500).json({ error: "Failed to save order" });
+  }
+});
+
+// Update order quantity (by _id)
+app.put("/api/salesman-orders/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { qty } = req.body;
+    if (qty === undefined) return res.status(400).json({ error: "qty required" });
+    const result = await salesmanOrdersCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { qty } }
+    );
+    res.json({ modifiedCount: result.modifiedCount });
+  } catch {
+    res.status(500).json({ error: "Failed to update order" });
+  }
+});
+
+// --- Ghorer Mal API ---
+// Each entry: { itemId, date, qty }
+app.get("/api/ghorer-mal", async (req, res) => {
+  try {
+    const { date } = req.query;
+    let query = {};
+    if (date) query.date = date;
+    const data = await client.db("mahiBakery").collection("ghorerMal").find(query).toArray();
+    res.json(data);
+  } catch {
+    res.status(500).json({ error: "Failed to fetch ghorer mal" });
+  }
+});
+
+// Save or update ghorer mal for an item and date
+app.post("/api/ghorer-mal", async (req, res) => {
+  try {
+    const { itemId, qty, date } = req.body;
+    if (!itemId || !date) return res.status(400).json({ error: "itemId, date required" });
+    const filter = { itemId, date };
+    const update = { $set: { itemId, qty, date } };
+    const result = await client.db("mahiBakery").collection("ghorerMal").updateOne(filter, update, { upsert: true });
+    res.status(201).json({ upserted: result.upsertedId, modified: result.modifiedCount });
+  } catch {
+    res.status(500).json({ error: "Failed to save ghorer mal" });
+  }
+});
+
+// --- Daily Summary API ---
+// Get daily summary: all salesman orders and ghorer mal for a date
+app.get("/api/salesman-summary/:date", async (req, res) => {
+  try {
+    const date = req.params.date;
+    // All orders for this date
+    const orders = await salesmanOrdersCollection.find({ date }).toArray();
+    // All ghorer mal for this date
+    const ghorerMal = await client.db("mahiBakery").collection("ghorerMal").find({ date }).toArray();
+    res.json({ orders, ghorerMal });
+  } catch {
+    res.status(500).json({ error: "Failed to fetch summary" });
   }
 });
 
