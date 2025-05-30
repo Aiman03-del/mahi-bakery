@@ -20,6 +20,7 @@ let ingredientsCollection;
 let usersCollection; // <-- add
 let salesmenCollection; // <-- add
 let salesmanOrdersCollection; // <-- add
+let salesmanDayOrdersCollection; // <-- add
 
 async function connectDB() {
   try {
@@ -31,6 +32,7 @@ async function connectDB() {
     usersCollection = db.collection("users"); // <-- add
     salesmenCollection = db.collection("salesmen"); // <-- add
     salesmanOrdersCollection = db.collection("salesmanOrders"); // <-- add
+    salesmanDayOrdersCollection = db.collection("salesmanDayOrders"); // <-- add
     console.log("✅ Connected to MongoDB");
   } catch (err) {
     console.error("❌ MongoDB connection error:", err);
@@ -473,6 +475,61 @@ app.get("/api/salesman-summary/:date", async (req, res) => {
     res.json({ orders, ghorerMal });
   } catch {
     res.status(500).json({ error: "Failed to fetch summary" });
+  }
+});
+
+// --- Salesman Day Orders Summary API ---
+// Save or update daily summary with new structure
+app.post("/api/salesman-day-orders", async (req, res) => {
+  try {
+    const { date, salesman, ghorerMalTotal, motPcsTotal } = req.body;
+    if (!date || !Array.isArray(salesman)) {
+      return res.status(400).json({ error: "date and salesman array required" });
+    }
+    // salesman: array of { salesmanId, itemId, qty }
+    const filter = { date };
+    const update = {
+      $set: {
+        date,
+        salesman, // array of { salesmanId, itemId, qty }
+        ghorerMalTotal: ghorerMalTotal || 0,
+        motPcsTotal: motPcsTotal || 0,
+      },
+    };
+    const result = await salesmanDayOrdersCollection.updateOne(filter, update, { upsert: true });
+    res.status(201).json({ upserted: result.upsertedId, modified: result.modifiedCount });
+  } catch {
+    res.status(500).json({ error: "Failed to save daily summary" });
+  }
+});
+
+// Get daily summary by date (returns structure as described)
+app.get("/api/salesman-day-orders/:date", async (req, res) => {
+  try {
+    const date = req.params.date;
+    const doc = await salesmanDayOrdersCollection.findOne({ date });
+    if (!doc) {
+      return res.status(200).json({
+        _id: null,
+        date,
+        salesman: [],
+        ghorerMalTotal: 0,
+        motPcsTotal: 0,
+      });
+    }
+    res.json(doc);
+  } catch {
+    res.status(500).json({ error: "Failed to fetch daily summary" });
+  }
+});
+
+// Get all daily summaries
+app.get("/api/salesman-day-orders", async (req, res) => {
+  try {
+    const docs = await salesmanDayOrdersCollection.find({}).sort({ date: -1 }).toArray();
+    res.json(docs);
+  } catch {
+    res.status(500).json({ error: "Failed to fetch daily summaries" });
   }
 });
 
