@@ -21,6 +21,7 @@ let usersCollection; // <-- add
 let salesmenCollection; // <-- add
 let salesmanOrdersCollection; // <-- add
 let salesmanDayOrdersCollection; // <-- add
+let dailySalesCollection; // <-- add
 
 async function connectDB() {
   try {
@@ -33,6 +34,7 @@ async function connectDB() {
     salesmenCollection = db.collection("salesmen"); // <-- add
     salesmanOrdersCollection = db.collection("salesmanOrders"); // <-- add
     salesmanDayOrdersCollection = db.collection("salesmanDayOrders"); // <-- add
+    dailySalesCollection = db.collection("dailySales"); // <-- add
     console.log("✅ Connected to MongoDB");
   } catch (err) {
     console.error("❌ MongoDB connection error:", err);
@@ -193,11 +195,11 @@ app.get("/api/items", async (req, res) => {
 });
 app.post("/api/items", async (req, res) => {
   try {
-    const { name, price } = req.body;
+    const { name, price, category } = req.body;
     if (!name) return res.status(400).json({ error: "Name required" });
     const exists = await itemsCollection.findOne({ name });
     if (exists) return res.status(409).json({ error: "Already exists" });
-    const result = await itemsCollection.insertOne({ name, price: price || "" });
+    const result = await itemsCollection.insertOne({ name, price: price || "", category: category || "" });
     res.status(201).json({ insertedId: result.insertedId });
   } catch {
     res.status(500).json({ error: "Failed to add item" });
@@ -277,11 +279,12 @@ app.get("/api/manage", async (req, res) => {
 // Update item by id
 app.put("/api/items/:id", async (req, res) => {
   try {
-    const { name, price } = req.body;
+    const { name, price, category } = req.body;
     const id = req.params.id;
     if (!name) return res.status(400).json({ error: "Name required" });
     const updateDoc = { name };
     if (price !== undefined) updateDoc.price = price;
+    if (category !== undefined) updateDoc.category = category;
     const result = await itemsCollection.updateOne(
       { _id: new ObjectId(id) },
       { $set: updateDoc }
@@ -530,6 +533,40 @@ app.get("/api/salesman-day-orders", async (req, res) => {
     res.json(docs);
   } catch {
     res.status(500).json({ error: "Failed to fetch daily summaries" });
+  }
+});
+
+// --- Daily Sale API ---
+// Save daily sale for all salesmen for a date
+app.post("/api/daily-sale", async (req, res) => {
+  try {
+    const { date, sales } = req.body;
+    if (!date || !Array.isArray(sales)) {
+      return res.status(400).json({ error: "date and sales array required" });
+    }
+    // Remove previous entries for this date
+    await dailySalesCollection.deleteMany({ date });
+    // Insert all sales
+    await dailySalesCollection.insertMany(
+      sales.map(sale => ({
+        ...sale,
+        date,
+      }))
+    );
+    res.status(201).json({ message: "Daily sales saved" });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to save daily sales" });
+  }
+});
+
+// Get daily sale for a date
+app.get("/api/daily-sale/:date", async (req, res) => {
+  try {
+    const date = req.params.date;
+    const docs = await dailySalesCollection.find({ date }).toArray();
+    res.json(docs);
+  } catch {
+    res.status(500).json({ error: "Failed to fetch daily sales" });
   }
 });
 
