@@ -537,7 +537,7 @@ app.get("/api/salesman-day-orders", async (req, res) => {
 });
 
 // --- Daily Sale API ---
-// Save daily sale for all salesmen for a date
+// Add POST /api/daily-sale endpoint for saving daily sales by date
 app.post("/api/daily-sale", async (req, res) => {
   try {
     const { date, sales } = req.body;
@@ -559,7 +559,7 @@ app.post("/api/daily-sale", async (req, res) => {
   }
 });
 
-// Get daily sale for a date
+// Keep GET /api/daily-sale/:date for reading only
 app.get("/api/daily-sale/:date", async (req, res) => {
   try {
     const date = req.params.date;
