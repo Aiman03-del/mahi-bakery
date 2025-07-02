@@ -1,12 +1,32 @@
+// Convert all imports to CommonJS require style:
 const express = require("express");
 const cors = require("cors");
 const { MongoClient, ObjectId } = require("mongodb");
 const dotenv = require("dotenv");
 const moment = require("moment");
+const http = require("http");
+const { Server } = require("socket.io");
 dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 5000;
+
+// --- Socket.io setup ---
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: "*", // Adjust as needed for production
+    methods: ["GET", "POST"],
+  },
+});
+io.on("connection", (socket) => {
+  console.log("🔌 Client connected:", socket.id);
+  socket.on("disconnect", () => {
+    console.log("❌ Client disconnected:", socket.id);
+  });
+});
+// Make io accessible in routes
+app.set("io", io);
 
 // Middleware
 app.use(cors());
@@ -117,7 +137,7 @@ app.get("/api/usage", async (req, res) => {
     }
 
     const grouped = {};
-    usages.forEach(u => {
+    usages.forEach((u) => {
       let m = moment(u.date, [
         "YYYY-MM-DD",
         "YYYY/MM/DD",
@@ -159,8 +179,8 @@ app.get("/api/usage", async (req, res) => {
           totalExpense: 0,
         };
       }
-      u.items.forEach(item => {
-        const idx = grouped[key].items.findIndex(i => i.name === item.name);
+      u.items.forEach((item) => {
+        const idx = grouped[key].items.findIndex((i) => i.name === item.name);
         if (idx > -1) {
           grouped[key].items[idx].totalKg = (
             parseFloat(grouped[key].items[idx].totalKg) + parseFloat(item.totalKg)
@@ -172,7 +192,7 @@ app.get("/api/usage", async (req, res) => {
       grouped[key].totalExpense += parseFloat(u.totalExpense);
     });
 
-    Object.values(grouped).forEach(g => {
+    Object.values(grouped).forEach((g) => {
       g.totalExpense = g.totalExpense.toFixed(2);
     });
 
@@ -187,7 +207,7 @@ app.get("/api/items", async (req, res) => {
   try {
     const items = await itemsCollection.find({}).sort({ _id: -1 }).toArray();
     // Ensure price field exists
-    items.forEach(item => { if (item.price === undefined) item.price = ""; });
+    items.forEach((item) => { if (item.price === undefined) item.price = ""; });
     res.json(items);
   } catch {
     res.status(500).json({ error: "Failed to fetch items" });
@@ -210,7 +230,7 @@ app.post("/api/items", async (req, res) => {
 app.get("/api/ingredients", async (req, res) => {
   try {
     const ingredients = await ingredientsCollection.find({}).sort({ _id: -1 }).toArray();
-    ingredients.forEach(ing => { if (ing.price === undefined) ing.price = ""; });
+    ingredients.forEach((ing) => { if (ing.price === undefined) ing.price = ""; });
     res.json(ingredients);
   } catch {
     res.status(500).json({ error: "Failed to fetch ingredients" });
@@ -268,8 +288,8 @@ app.get("/api/manage", async (req, res) => {
   try {
     const items = await itemsCollection.find({}).sort({ _id: -1 }).toArray();
     const ingredients = await ingredientsCollection.find({}).sort({ _id: -1 }).toArray();
-    items.forEach(item => { if (item.price === undefined) item.price = ""; });
-    ingredients.forEach(ing => { if (ing.price === undefined) ing.price = ""; });
+    items.forEach((item) => { if (item.price === undefined) item.price = ""; });
+    ingredients.forEach((ing) => { if (ing.price === undefined) ing.price = ""; });
     res.json({ items, ingredients });
   } catch {
     res.status(500).json({ error: "Failed to fetch data" });
@@ -548,29 +568,150 @@ app.post("/api/daily-sale", async (req, res) => {
     await dailySalesCollection.deleteMany({ date });
     // Insert all sales
     await dailySalesCollection.insertMany(
-      sales.map(sale => ({
+      sales.map((sale) => ({
         ...sale,
         date,
       }))
     );
+
+    // --- রিয়েলটাইম ফিউচার ডিউ আপডেট ---
+    // প্রতিটি সেলসম্যানের জন্য, এই তারিখের পরবর্তী সব দিনের prevDue, totalDue, currDue আপডেট করুন
+    const uniqueSalesmen = [...new Set(sales.map((s) => s.salesmanId))];
+    for (const salesmanId of uniqueSalesmen) {
+      await recalculateFutureDues(salesmanId, date);
+    }
+
+    // --- Emit socket event to all clients ---
+    const io = req.app.get("io");
+    io.emit("daily-sale-updated", { date });
+
     res.status(201).json({ message: "Daily sales saved" });
   } catch (err) {
     res.status(500).json({ error: "Failed to save daily sales" });
   }
 });
 
+// Helper: recalculate all future daily sales for a salesman after a given date
+async function recalculateFutureDues(salesmanId, fromDate) {
+  // Find all future sales for this salesman, ordered by date ascending
+  const futureSales = await dailySalesCollection
+    .find({ salesmanId, date: { $gt: fromDate } })
+    .sort({ date: 1 })
+    .toArray();
+
+  let prevDue = null;
+  // Get the currDue of the last saved day (fromDate)
+  const lastDay = await dailySalesCollection.findOne({ salesmanId, date: fromDate });
+  if (lastDay) {
+    prevDue = lastDay.currDue ?? lastDay.currentDue ?? lastDay.due ?? 0;
+  } else {
+    // If not found, get the last known due before fromDate
+    const last = await dailySalesCollection
+      .find({ salesmanId, date: { $lt: fromDate } })
+      .sort({ date: -1 })
+      .limit(1)
+      .toArray();
+    prevDue = last[0]?.currDue ?? 0;
+  }
+
+  for (const sale of futureSales) {
+    // recalculate prevDue, totalDue, currDue
+    const categories = Array.isArray(sale.categories) ? sale.categories : [];
+    const totalAmount = categories.reduce((sum, c) => sum + (Number(c.total) || 0), 0);
+    const deposit = Number(sale.deposit) || 0;
+    const newPrevDue = Number(prevDue) || 0;
+    const totalDue = totalAmount + newPrevDue;
+    const currDue = totalDue - deposit;
+
+    await dailySalesCollection.updateOne(
+      { _id: sale._id },
+      {
+        $set: {
+          prevDue: newPrevDue,
+          totalAmount: Number(totalAmount.toFixed(2)),
+          totalDue: Number(totalDue.toFixed(2)),
+          currDue: Number(currDue.toFixed(2)),
+        },
+      }
+    );
+    prevDue = currDue;
+  }
+}
+
 // Keep GET /api/daily-sale/:date for reading only
 app.get("/api/daily-sale/:date", async (req, res) => {
   try {
     const date = req.params.date;
+    // Get all salesmen
+    const allSalesmen = await salesmenCollection.find().toArray();
+
+    // Get all sales for this date
     const docs = await dailySalesCollection.find({ date }).toArray();
-    res.json(docs);
+    const salesMap = {};
+    docs.forEach((sale) => {
+      salesMap[sale.salesmanId] = sale;
+    });
+
+    // Get previous day's sales for prevDue fallback
+    const prevDate = (() => {
+      const d = new Date(date);
+      d.setDate(d.getDate() - 1);
+      return d.toISOString().slice(0, 10);
+    })();
+    const prevDocs = await dailySalesCollection.find({ date: prevDate }).toArray();
+    const prevDueMap = {};
+    prevDocs.forEach((sale) => {
+      prevDueMap[sale.salesmanId] = sale.currDue ?? sale.currentDue ?? sale.due ?? 0;
+    });
+
+    // Helper: get last known due before current date
+    const getLastKnownDue = async (salesmanId) => {
+      const last = await dailySalesCollection
+        .find({ salesmanId, date: { $lt: date } })
+        .sort({ date: -1 })
+        .limit(1)
+        .toArray();
+      return last[0]?.currDue ?? 0;
+    };
+
+    const finalDocs = [];
+
+    for (const sm of allSalesmen) {
+      const today = salesMap[sm._id];
+      if (today) {
+        // If prevDue is missing/empty/zero, fill from prevDueMap
+        if (
+          today.prevDue === undefined ||
+          today.prevDue === null ||
+          today.prevDue === "" ||
+          Number(today.prevDue) === 0
+        ) {
+          today.prevDue = prevDueMap[sm._id] ?? 0;
+        }
+        finalDocs.push(today);
+      } else {
+        // No entry for this salesman today: fallback to prev or last known due
+        const fallbackDue = prevDueMap[sm._id] ?? (await getLastKnownDue(sm._id));
+        finalDocs.push({
+          salesmanId: sm._id,
+          date,
+          categories: [],
+          totalAmount: 0,
+          deposit: 0,
+          prevDue: fallbackDue,
+          totalDue: fallbackDue,
+          currDue: fallbackDue,
+        });
+      }
+    }
+
+    res.json(finalDocs);
   } catch {
     res.status(500).json({ error: "Failed to fetch daily sales" });
   }
 });
 
 // Start server
-app.listen(port, () => {
+server.listen(port, () => {
   console.log(`🚀 Server running on http://localhost:${port}`);
 });
