@@ -92,6 +92,8 @@ app.post("/usage", async (req, res) => {
     const doc = { ...data, date: dateKey };
     if (!doc.retails) doc.retails = [];
     if (!doc.pieces) doc.pieces = []; // Ensure pieces is always present
+    // Store selectedItems if present
+    if (!doc.selectedItems) doc.selectedItems = [];
     const result = await usageCollection.insertOne(doc);
     res.status(201).json({ insertedId: result.insertedId });
   } catch (error) {
@@ -110,16 +112,18 @@ app.get("/api/usage/:date", async (req, res) => {
         items: [],
         prices: [],
         retails: [],
-        pieces: [], // Return empty pieces array if not found
+        pieces: [],
         totalExpense: "0",
+        selectedItems: [], // <-- return empty selectedItems if not found
       });
     }
     res.json({
       items: result.items || [],
       prices: result.prices || [],
       retails: result.retails || [],
-      pieces: result.pieces || [], // Return pieces from DB
+      pieces: result.pieces || [],
       totalExpense: result.totalExpense || "0",
+      selectedItems: result.selectedItems || [], // <-- return selectedItems from DB
     });
   } catch (error) {
     res.status(500).json({ error: "Failed to fetch data" });
@@ -205,7 +209,12 @@ app.get("/api/usage", async (req, res) => {
 // --- Items API ---
 app.get("/api/items", async (req, res) => {
   try {
-    const items = await itemsCollection.find({}).sort({ _id: -1 }).toArray();
+    const { search } = req.query;
+    let query = {};
+    if (search) {
+      query = { name: { $regex: search, $options: "i" } };
+    }
+    const items = await itemsCollection.find(query).sort({ _id: -1 }).toArray();
     // Ensure price field exists
     items.forEach((item) => { if (item.price === undefined) item.price = ""; });
     res.json(items);
@@ -229,7 +238,12 @@ app.post("/api/items", async (req, res) => {
 // --- Ingredients API ---
 app.get("/api/ingredients", async (req, res) => {
   try {
-    const ingredients = await ingredientsCollection.find({}).sort({ _id: -1 }).toArray();
+    const { search } = req.query;
+    let query = {};
+    if (search) {
+      query = { name: { $regex: search, $options: "i" } };
+    }
+    const ingredients = await ingredientsCollection.find(query).sort({ _id: -1 }).toArray();
     ingredients.forEach((ing) => { if (ing.price === undefined) ing.price = ""; });
     res.json(ingredients);
   } catch {
@@ -359,7 +373,12 @@ app.delete("/api/ingredients/:id", async (req, res) => {
 // Get all salesmen
 app.get("/api/salesmen", async (req, res) => {
   try {
-    const salesmen = await salesmenCollection.find({}).sort({ _id: 1 }).toArray();
+    const { search } = req.query;
+    let query = {};
+    if (search) {
+      query = { name: { $regex: search, $options: "i" } };
+    }
+    const salesmen = await salesmenCollection.find(query).sort({ _id: 1 }).toArray();
     res.json(salesmen);
   } catch {
     res.status(500).json({ error: "Failed to fetch salesmen" });
@@ -566,11 +585,12 @@ app.post("/api/daily-sale", async (req, res) => {
     }
     // Remove previous entries for this date
     await dailySalesCollection.deleteMany({ date });
-    // Insert all sales
+    // Insert all sales, including selectedCategories for each salesman
     await dailySalesCollection.insertMany(
       sales.map((sale) => ({
         ...sale,
         date,
+        selectedCategories: Array.isArray(sale.selectedCategories) ? sale.selectedCategories : [],
       }))
     );
 
@@ -688,6 +708,10 @@ app.get("/api/daily-sale/:date", async (req, res) => {
         ) {
           today.prevDue = prevDueMap[sm._id] ?? 0;
         }
+        // Always include selectedCategories in response
+        today.selectedCategories = Array.isArray(today.selectedCategories)
+          ? today.selectedCategories
+          : [];
         finalDocs.push(today);
       } else {
         // No entry for this salesman today: fallback to prev or last known due
@@ -701,6 +725,7 @@ app.get("/api/daily-sale/:date", async (req, res) => {
           prevDue: fallbackDue,
           totalDue: fallbackDue,
           currDue: fallbackDue,
+          selectedCategories: [], // <-- default empty
         });
       }
     }
@@ -708,6 +733,53 @@ app.get("/api/daily-sale/:date", async (req, res) => {
     res.json(finalDocs);
   } catch {
     res.status(500).json({ error: "Failed to fetch daily sales" });
+  }
+});
+
+// --- Items Search API ---
+app.get("/api/items/search", async (req, res) => {
+  try {
+    const { query } = req.query;
+    let searchQuery = {};
+    if (query) {
+      searchQuery = { name: { $regex: query, $options: "i" } };
+    }
+    const items = await itemsCollection.find(searchQuery).sort({ _id: -1 }).toArray();
+    items.forEach((item) => { if (item.price === undefined) item.price = ""; });
+    res.json({ items });
+  } catch {
+    res.status(500).json({ error: "Failed to search items" });
+  }
+});
+
+// --- Ingredients Search API ---
+app.get("/api/ingredients/search", async (req, res) => {
+  try {
+    const { query } = req.query;
+    let searchQuery = {};
+    if (query) {
+      searchQuery = { name: { $regex: query, $options: "i" } };
+    }
+    const ingredients = await ingredientsCollection.find(searchQuery).sort({ _id: -1 }).toArray();
+    ingredients.forEach((ing) => { if (ing.price === undefined) ing.price = ""; });
+    res.json({ ingredients });
+  } catch {
+    res.status(500).json({ error: "Failed to search ingredients" });
+  }
+});
+
+// --- Salesmen Search API ---
+app.get("/api/salesmen/search", async (req, res) => {
+  try {
+    const { query } = req.query;
+    let searchQuery = {};
+    if (query) {
+      searchQuery = { name: { $regex: query, $options: "i" } };
+    }
+    const salesmen = await salesmenCollection.find(searchQuery).sort({ _id: 1 }).toArray();
+    res.json({ salesmen });
+  } catch {
+    res.status(500).json({ error: "Failed to search salesmen" });
   }
 });
 
