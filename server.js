@@ -85,17 +85,48 @@ const toDateKey = (date) => {
 app.post("/usage", async (req, res) => {
   try {
     const data = req.body;
-    // Always save date as yyyy-MM-dd
     const dateKey = toDateKey(data.date);
     await usageCollection.deleteMany({ date: dateKey });
+
+    // --- Merge pieces into items array ---
+    let itemsArr = [];
+    if (Array.isArray(data.items) && data.items.length > 0) {
+      // If items are just names, convert to objects
+      if (typeof data.items[0] === "string") {
+        itemsArr = data.items.map((name, idx) => ({
+          name,
+          price: Array.isArray(data.prices) ? data.prices[idx] ?? "" : "",
+          pieces: Array.isArray(data.pieces) ? data.pieces[idx] ?? "" : "",
+        }));
+      } else if (typeof data.items[0] === "object") {
+        // Already objects, just attach pieces if present
+        itemsArr = data.items.map((item, idx) => ({
+          ...item,
+          pieces: Array.isArray(data.pieces) ? data.pieces[idx] ?? item.pieces ?? "" : item.pieces ?? "",
+        }));
+      }
+    } else {
+      // fallback: fetch all items from db
+      const dbItems = await itemsCollection.find({}).sort({ _id: -1 }).toArray();
+      itemsArr = dbItems.map((i, idx) => ({
+        name: i.name,
+        price: i.price ?? "",
+        pieces: Array.isArray(data.pieces) ? data.pieces[idx] ?? "" : "",
+      }));
+    }
+
     // Save retails array if present
-    const doc = { ...data, date: dateKey };
+    const doc = { ...data, date: dateKey, items: itemsArr };
     if (!doc.retails) doc.retails = [];
-    if (!doc.pieces) doc.pieces = []; // Ensure pieces is always present
-    // Store selectedItems if present
+    // Remove pieces array from doc (no need to store separately)
+    delete doc.pieces;
     if (!doc.selectedItems) doc.selectedItems = [];
     const result = await usageCollection.insertOne(doc);
     res.status(201).json({ insertedId: result.insertedId });
+
+    // --- Emit socket event to all clients ---
+    const io = req.app.get("io");
+    io.emit("usage-updated", { date: dateKey });
   } catch (error) {
     res.status(500).json({ error: "Failed to insert data" });
   }
@@ -108,22 +139,50 @@ app.get("/api/usage/:date", async (req, res) => {
     const result = await usageCollection.findOne({ date: dateKey });
     if (!result) {
       // Return empty usage data instead of 404
+      const dbItems = await itemsCollection.find({}).sort({ _id: -1 }).toArray();
       return res.json({
-        items: [],
-        prices: [],
+        items: dbItems.map(i => ({
+          name: i.name,
+          price: i.price ?? "",
+          pieces: "",
+        })),
+        prices: dbItems.map(i => i.price ?? ""),
         retails: [],
-        pieces: [],
         totalExpense: "0",
-        selectedItems: [], // <-- return empty selectedItems if not found
+        selectedItems: [],
       });
     }
+    // Ensure items are objects with pieces
+    let itemsArr = [];
+    if (Array.isArray(result.items) && result.items.length > 0) {
+      if (typeof result.items[0] === "string") {
+        // Convert to objects
+        itemsArr = result.items.map((name, idx) => ({
+          name,
+          price: Array.isArray(result.prices) ? result.prices[idx] ?? "" : "",
+          pieces: Array.isArray(result.pieces) ? result.pieces[idx] ?? "" : "",
+        }));
+      } else if (typeof result.items[0] === "object") {
+        itemsArr = result.items.map((item, idx) => ({
+          ...item,
+          pieces: item.pieces ?? (Array.isArray(result.pieces) ? result.pieces[idx] ?? "" : ""),
+        }));
+      }
+    } else {
+      // fallback: fetch all items from db
+      const dbItems = await itemsCollection.find({}).sort({ _id: -1 }).toArray();
+      itemsArr = dbItems.map((i, idx) => ({
+        name: i.name,
+        price: i.price ?? "",
+        pieces: "",
+      }));
+    }
     res.json({
-      items: result.items || [],
+      items: itemsArr,
       prices: result.prices || [],
       retails: result.retails || [],
-      pieces: result.pieces || [],
       totalExpense: result.totalExpense || "0",
-      selectedItems: result.selectedItems || [], // <-- return selectedItems from DB
+      selectedItems: result.selectedItems || [],
     });
   } catch (error) {
     res.status(500).json({ error: "Failed to fetch data" });
@@ -780,6 +839,44 @@ app.get("/api/salesmen/search", async (req, res) => {
     res.json({ salesmen });
   } catch {
     res.status(500).json({ error: "Failed to search salesmen" });
+  }
+});
+
+// --- Categories API ---
+// Get all unique categories from items, with price (first item's price for that category)
+app.get("/api/categories", async (req, res) => {
+  try {
+    const pipeline = [
+      { $match: { category: { $exists: true, $ne: "" } } },
+      {
+        $group: {
+          _id: "$category",
+          price: { $first: "$price" }
+        }
+      },
+      { $sort: { _id: 1 } }
+    ];
+    const categories = await itemsCollection.aggregate(pipeline).toArray();
+    // Format: { category, price }
+    res.json(categories.map(c => ({ category: c._id, price: c.price ?? "" })));
+  } catch {
+    res.status(500).json({ error: "Failed to fetch categories" });
+  }
+});
+
+// Update price for all items in a category
+app.put("/api/categories/:category", async (req, res) => {
+  try {
+    const category = req.params.category;
+    const { price } = req.body;
+    if (!category) return res.status(400).json({ error: "Category required" });
+    const result = await itemsCollection.updateMany(
+      { category },
+      { $set: { price } }
+    );
+    res.json({ modifiedCount: result.modifiedCount });
+  } catch {
+    res.status(500).json({ error: "Failed to update category price" });
   }
 });
 
