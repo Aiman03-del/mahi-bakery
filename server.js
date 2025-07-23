@@ -273,7 +273,8 @@ app.get("/api/items", async (req, res) => {
     if (search) {
       query = { name: { $regex: search, $options: "i" } };
     }
-    const items = await itemsCollection.find(query).sort({ _id: -1 }).toArray();
+    // Change sort to ascending (_id: 1)
+    const items = await itemsCollection.find(query).sort({ _id: 1 }).toArray();
     // Ensure price field exists
     items.forEach((item) => { if (item.price === undefined) item.price = ""; });
     res.json(items);
@@ -302,7 +303,8 @@ app.get("/api/ingredients", async (req, res) => {
     if (search) {
       query = { name: { $regex: search, $options: "i" } };
     }
-    const ingredients = await ingredientsCollection.find(query).sort({ _id: -1 }).toArray();
+    // Change sort to ascending (_id: 1)
+    const ingredients = await ingredientsCollection.find(query).sort({ _id: 1 }).toArray();
     ingredients.forEach((ing) => { if (ing.price === undefined) ing.price = ""; });
     res.json(ingredients);
   } catch {
@@ -359,8 +361,9 @@ app.get("/api/users/:email", async (req, res) => {
 // Get all items and ingredients together
 app.get("/api/manage", async (req, res) => {
   try {
-    const items = await itemsCollection.find({}).sort({ _id: -1 }).toArray();
-    const ingredients = await ingredientsCollection.find({}).sort({ _id: -1 }).toArray();
+    // Change sort to ascending (_id: 1)
+    const items = await itemsCollection.find({}).sort({ _id: 1 }).toArray();
+    const ingredients = await ingredientsCollection.find({}).sort({ _id: 1 }).toArray();
     items.forEach((item) => { if (item.price === undefined) item.price = ""; });
     ingredients.forEach((ing) => { if (ing.price === undefined) ing.price = ""; });
     res.json({ items, ingredients });
@@ -803,7 +806,8 @@ app.get("/api/items/search", async (req, res) => {
     if (query) {
       searchQuery = { name: { $regex: query, $options: "i" } };
     }
-    const items = await itemsCollection.find(searchQuery).sort({ _id: -1 }).toArray();
+    // Change sort to ascending (_id: 1)
+    const items = await itemsCollection.find(searchQuery).sort({ _id: 1 }).toArray();
     items.forEach((item) => { if (item.price === undefined) item.price = ""; });
     res.json({ items });
   } catch {
@@ -853,12 +857,28 @@ app.get("/api/categories", async (req, res) => {
           _id: "$category",
           price: { $first: "$price" }
         }
-      },
-      { $sort: { _id: 1 } }
+      }
+      // Remove $sort here, we'll sort manually below
     ];
     const categories = await itemsCollection.aggregate(pipeline).toArray();
     // Format: { category, price }
-    res.json(categories.map(c => ({ category: c._id, price: c.price ?? "" })));
+    const formatted = categories.map(c => ({ category: c._id, price: c.price ?? "" }));
+
+    // Desired order
+    const desiredOrder = ["কাচা", "বড়", "ট্রে", "পেস্ট্রি"];
+    // Sort by desired order, others go after
+    formatted.sort((a, b) => {
+      const idxA = desiredOrder.indexOf(a.category);
+      const idxB = desiredOrder.indexOf(b.category);
+      if (idxA === -1 && idxB === -1) {
+        return a.category.localeCompare(b.category, "bn");
+      }
+      if (idxA === -1) return 1;
+      if (idxB === -1) return -1;
+      return idxA - idxB;
+    });
+
+    res.json(formatted);
   } catch {
     res.status(500).json({ error: "Failed to fetch categories" });
   }
